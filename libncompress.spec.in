@@ -1,0 +1,54 @@
+Summary: Ye Olde Compress Library
+Name: libncompress
+Version: @PACKAGE_VERSION@
+Release: @PACKAGE_RELEASE@
+License: See LICENSE
+Group: Development/Libraries
+URL: http://somewhere.com/libncompress-%{version}.tgz
+Packager: Anthony L. Shipman
+
+Prefix: /usr
+Source0: libncompress-%{version}.tgz
+BuildRoot: %{_topdir}/buildroot
+
+%description 
+This library contains the compression and decompression code
+used by the old compress program. In particular it is
+from version 4.2 of the ncompress package.
+
+%prep
+%setup
+
+
+%build
+./configure --prefix=%{_prefix} --docdir=%{_defaultdocdir}
+make
+
+
+%install
+rm -rf $RPM_BUILD_ROOT
+mkdir -p $RPM_BUILD_ROOT
+make DEST_DIR=$RPM_BUILD_ROOT/ install
+
+install -d $RPM_BUILD_ROOT/%{_libdir}/pkgconfig/
+install libncompress.pc $RPM_BUILD_ROOT/%{_libdir}/pkgconfig/
+
+gzip -c ncompress.man > ncompress.3.gz
+install -d $RPM_BUILD_ROOT/%{_mandir}/man3
+install ncompress.3.gz $RPM_BUILD_ROOT/%{_mandir}/man3
+
+install -d $RPM_BUILD_ROOT/%{_defaultdocdir}/libncompress
+install UNLICENSE README.md README.html $RPM_BUILD_ROOT/%{_defaultdocdir}/libncompress
+
+
+%clean
+rm -rf $RPM_BUILD_ROOT
+
+
+%files
+%defattr(-,root,root)
+%{_libdir}/libncompress.*
+%{_libdir}/pkgconfig/libncompress.pc
+%{_includedir}/ncompress42.h
+%{_mandir}/man3/ncompress.3.gz
+%{_defaultdocdir}/libncompress

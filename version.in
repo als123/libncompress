@@ -1,0 +1,6 @@
+
+version=@PACKAGE_VERSION@
+release=@PACKAGE_RELEASE@
+name=libncompress
+vername=${name}-${version}
+tar=${vername}.tgz

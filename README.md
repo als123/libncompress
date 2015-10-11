@@ -1,12 +1,13 @@
 
-# Ye Olde Compress Library
+# libncompress
 
-This is derived from the old Unix compress program.  The code that
-does the compression and decompression has been separated out into a
-little library.
+The venerable UNIX `compress` command dates back to at least the
+early 1980s. It is well obsolete but sometimes you need to compress or
+decompress using its algorithm.
 
-Along the way a lot of old cruft has been removed e.g. support for
-Z8000 microprocessors and DOS on 8088 or 80286.
+The latest version of this command can be found in the `ncompress`
+package, version 4.2.  However it does not provide a library with just
+the compression code, such as the `zlib` does for the `gzip` command.
 
-The source originally came from https://github.com/vapier/ncompress 
-It is in the public domain. See the UNLICENSE file.
+This library contains just the compression and decompression code from
+the command.  The code has been repackaged with a simple API.

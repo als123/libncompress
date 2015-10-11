@@ -1,0 +1,45 @@
+#!/bin/bash
+
+. version
+
+tmp=./$$
+base=$tmp/$vername
+
+trap "/bin/rm -rf $tmp" 0
+
+if [ -r ./config.status ]
+then
+    ./config.status
+elif [ -r ./configure ]
+then
+    ./configure
+else
+    echo "Cannot configure to get a .spec file" 1>&2
+    exit 1
+fi
+
+make README.html
+
+mkdir -p $base
+mkdir -p $base/tests
+
+cp -r \
+    UNLICENSE \
+    README.md \
+    README.html \
+    *.in \
+    Makefile \
+    configure \
+    ncompress42.c \
+    ncompress42.h \
+    ncompress.man \
+    libncompress.spec \
+    style.css \
+    $base
+
+cp -r \
+    tests/Makefile \
+    tests/*.c \
+    $base/tests
+
+(cd $tmp && tar zcf ../${tar} $vername)

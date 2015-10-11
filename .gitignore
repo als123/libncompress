@@ -1,1 +1,12 @@
 *~
+*.o
+*.a
+*.so
+*.rpm
+*.tgz
+autom4te.cache
+config.log
+config.status
+libncompress.pc
+libncompress.spec
+version

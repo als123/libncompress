@@ -1,0 +1,92 @@
+.\" Copyright (c) Anthony L Shipman 2015
+.\" All Rights Reserved.
+.\"
+.\" Redistribution and use in source and binary forms, with or without
+.\" modification, are permitted provided that the following conditions
+.\" are met:
+.\" 1. Redistributions of source code must retain the above copyright
+.\"    notice immediately at the beginning of the file, without modification,
+.\"    this list of conditions, and the following disclaimer.
+.\" 2. Redistributions in binary form must reproduce the above copyright
+.\"    notice, this list of conditions and the following disclaimer in the
+.\"    documentation and/or other materials provided with the distribution.
+.\"
+.\" THIS SOFTWARE IS PROVIDED BY THE AUTHOR AND CONTRIBUTORS ``AS IS'' AND
+.\" ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+.\" IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+.\" ARE DISCLAIMED. IN NO EVENT SHALL THE AUTHOR OR CONTRIBUTORS BE LIABLE FOR
+.\" ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+.\" DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
+.\" OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
+.\" HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
+.\" LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
+.\" OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
+.\" SUCH DAMAGE.
+.\"
+.TH LIBNCOMPRESS 3 "11 October, 2015"
+.SH NAME
+ncompress \- Ye Olde Compression Library
+.SH SYNOPSIS
+.B  #include <ncompress42.h>
+.sp
+.BI "void initCompress(CompressCtxt* " ctxt ", int " bits ");"
+.sp
+.BI "void initDecompress(CompressCtxt* " ctxt ");"
+.sp
+.BI "void freeCompress(CompressCtxt* " ctxt ");"
+.sp
+.BI "CompressError compress(CompressCtxt* " ctxt ");"
+.sp
+.BI "CompressError decompress(CompressCtxt* " ctxt ");"
+.fi
+.SH DESCRIPTION
+These functions perform compression and decompression the same as the old
+Unix compress program. The code has been extracted out of version 4.2 of the
+ncompress package.
+.P
+The data is pulled from a source stream using a reader function and
+pushed to a destination stream using a writer function.  The functions
+are supplied in the 
+.B CompressCtxt
+object.  
+.P
+The header file describes the types and arguments.
+The 
+.I bits
+argument is a number in the range 9 to 16 to set the maximum size of the
+symbols in the compressed data.  You can supply 0 to get a default size
+(which is 16).
+.SH EXAMPLE
+The documentation includes a 
+.I tests 
+directory showing the use of the library.  Here is a simplified example.
+.nf
+
+static int
+reader(Byte* bytes, size_t numBytes, void* rwCtxt)
+{
+    ...
+}
+
+static int
+writer(Byte* bytes, size_t numBytes, void* rwCtxt)
+{
+    ...
+}
+
+static CompressError
+run(Ctxt* rwCtxt)
+{
+    CompressCtxt cc;
+    CompressError err;
+
+    cc.reader = reader;
+    cc.writer = writer;
+    cc.rwCtxt = rwCtxt;
+
+    initCompress(&cc, 0);
+    return compress(&cc);
+}
+.fi
+.SH AUTHORS
+Anthony L Shipman
