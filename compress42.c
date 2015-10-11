@@ -17,299 +17,119 @@
 
     ... and many more revisions have been elided
  */
-#include    <stdint.h>
-#include    <stdio.h>
 #include    <stdlib.h>
 #include    <string.h>
 #include    <unistd.h>
-#include    <fcntl.h>
 #include    <ctype.h>
-#include    <signal.h>
-#include    <sys/types.h>
-#include    <sys/stat.h>
 #include    <errno.h>
 
-#ifdef DIRENT
-#   include <dirent.h>
-#   define  RECURSIVE       1
-#   undef   SYSDIR
-#endif
-#ifdef SYSDIR
-#   include <sys/dir.h>
-#   define  RECURSIVE       1
-#endif
-#ifdef UTIME_H
-#   include <utime.h>
-#else
-    struct utimbuf {
-        time_t actime;
-        time_t modtime;
-    };
-#endif
+#include    <sys/types.h>
+#include    <sys/stat.h>
+#include    <fcntl.h>
+#include    <signal.h>
+#include    <stdio.h>
+#include    <utime.h>
 
-#ifdef  __STDC__
-#   define  ARGS(a)             a
-#else
-#   define  ARGS(a)             ()
-#endif
+#include    "compress42.h"
 
-#ifndef SIG_TYPE
-#   define  SIG_TYPE    void (*)()
-#endif
+#define DEBUG 1
 
-    
-#undef  min
-#define min(a,b)    ((a>b) ? b : a)
+//======================================================================
 
-#ifndef IBUFSIZ
-#   define  IBUFSIZ BUFSIZ  /* Defailt input buffer size                            */
-#endif
-#ifndef OBUFSIZ
-#   define  OBUFSIZ BUFSIZ  /* Default output buffer size                           */
-#endif
+typedef long int    code_int;
+typedef long int    count_int;
+typedef long int    cmp_code_int;
 
-#define MAXPATHLEN 1024     /* MAXPATHLEN - maximum length of a pathname we allow   */
-#define SIZE_INNER_LOOP     256 /* Size of the inter (fast) compress loop           */
+/* Defines for third byte of header                     */
+static const Byte MAGIC_1 = '\037';        /* First byte of compressed file */
+static const Byte MAGIC_2 = '\235';        /* Second byte of compressed file */
 
-                            /* Defines for third byte of header                     */
-#define MAGIC_1     (char_type)'\037'/* First byte of compressed file               */
-#define MAGIC_2     (char_type)'\235'/* Second byte of compressed file              */
-#define BIT_MASK    0x1f            /* Mask for 'number of compresssion bits'       */
-                                    /* Masks 0x20 and 0x40 are free.                */
-                                    /* I think 0x20 should mean that there is       */
-                                    /* a fourth header byte (for expansion).        */
-#define BLOCK_MODE  0x80            /* Block compresssion if table is full and      */
-                                    /* compression rate is dropping flush tables    */
+/*  Mask for 'number of compression bits'. Masks 0x20 and 0x40 are free.
+    I think 0x20 should mean that there is a fourth header byte (for expansion).
+*/
+static const Byte BIT_MASK = 0x1f;
 
-            /* the next two codes should not be changed lightly, as they must not   */
-            /* lie within the contiguous general code space.                        */
-#define FIRST   257                 /* first free entry                             */
-#define CLEAR   256                 /* table clear output code                      */
+/*  Block compresssion if table is full and compression rate is dropping
+    flush tables.
+*/
+static const Byte BLOCK_MODE = 0x80;
 
-#define INIT_BITS 9         /* initial number of bits/code */
+/*  The next two codes should not be changed lightly, as they must not
+    lie within the contiguous general code space.
+*/
+static const size_t FIRST = 257;        // first free entry
+static const size_t CLEAR = 256;        // table clear output code
+static const int    INIT_BITS = 9;      // initial number of bits/code
 
+#define IBUFSIZ 8192
+#define OBUFSIZ 8192
 
+// Extra room at the end for diddling with bits
+#define IBUFSIZ_TOTAL (IBUFSIZ + 64)
+#define OBUFSIZ_TOTAL (OBUFSIZ + 2048)
 
-#ifndef BYTEORDER
-#   define  BYTEORDER   0000
-#endif
+/*  The original code had a FAST variant. The code that
+    follows is just the FAST variant.
+*/
+#define  HBITS       17          /* 50% occupancy */
+#define  HSIZE      (1<<HBITS)
+#define  HMASK      (HSIZE-1)
+#define  HPRIME       9941
+#define  BITS           16
 
-#ifndef NOALLIGN
-#   define  NOALLIGN    0
-#endif
-
-
-// A modern processor can do the fast thing.
-#define FAST
-
-#ifdef FAST
-#   define  HBITS       17          /* 50% occupancy */
-#   define  HSIZE      (1<<HBITS)
-#   define  HMASK      (HSIZE-1)
-#   define  HPRIME       9941
-#   define  BITS           16
-#   undef   MAXSEG_64K
-#else
-#   if BITS == 16
-#       define HSIZE    69001       /* 95% occupancy */
-#   endif
-#   if BITS == 15
-#       define HSIZE    35023       /* 94% occupancy */
-#   endif
-#   if BITS == 14
-#       define HSIZE    18013       /* 91% occupancy */
-#   endif
-#   if BITS == 13
-#       define HSIZE    9001        /* 91% occupancy */
-#   endif
-#   if BITS <= 12
-#       define HSIZE    5003        /* 80% occupancy */
-#   endif
-#endif
-
-#define CHECK_GAP 10000
-
-typedef long int        code_int;
-
-typedef long int        count_int;
-typedef long int        cmp_code_int;
-typedef unsigned char   char_type;
-
-
-#define ARGVAL() (*++(*argv) || (--argc && *++argv))
+static const int CHECK_GAP = 10000;
 
 #define MAXCODE(n)  (1L << (n))
 
-#ifndef REGISTERS
-#   define  REGISTERS   2
-#endif
-#define REG1    
-#define REG2    
-#define REG3    
-#define REG4    
-#define REG5    
-#define REG6    
-#define REG7    
-#define REG8    
-#define REG9    
-#define REG10
-#define REG11   
-#define REG12   
-#define REG13
-#define REG14
-#define REG15
-#define REG16
-#if REGISTERS >= 1
-#   undef   REG1
-#   define  REG1    register
-#endif
-#if REGISTERS >= 2
-#   undef   REG2
-#   define  REG2    register
-#endif
-#if REGISTERS >= 3
-#   undef   REG3
-#   define  REG3    register
-#endif
-#if REGISTERS >= 4
-#   undef   REG4
-#   define  REG4    register
-#endif
-#if REGISTERS >= 5
-#   undef   REG5
-#   define  REG5    register
-#endif
-#if REGISTERS >= 6
-#   undef   REG6
-#   define  REG6    register
-#endif
-#if REGISTERS >= 7
-#   undef   REG7
-#   define  REG7    register
-#endif
-#if REGISTERS >= 8
-#   undef   REG8
-#   define  REG8    register
-#endif
-#if REGISTERS >= 9
-#   undef   REG9
-#   define  REG9    register
-#endif
-#if REGISTERS >= 10
-#   undef   REG10
-#   define  REG10   register
-#endif
-#if REGISTERS >= 11
-#   undef   REG11
-#   define  REG11   register
-#endif
-#if REGISTERS >= 12
-#   undef   REG12
-#   define  REG12   register
-#endif
-#if REGISTERS >= 13
-#   undef   REG13
-#   define  REG13   register
-#endif
-#if REGISTERS >= 14
-#   undef   REG14
-#   define  REG14   register
-#endif
-#if REGISTERS >= 15
-#   undef   REG15
-#   define  REG15   register
-#endif
-#if REGISTERS >= 16
-#   undef   REG16
-#   define  REG16   register
-#endif
 
-
-union   bytes
+typedef struct compr_state
 {
-    long    word;
-    struct
+    long        hp;
+    int         rpos;           // read position
+    int         rlop;           // handle bytes from rpos up to this index
+    long        fc;
+    int         outbits;        // the number of bits written into outbuf
+    int         rsize;
+    int         codefull;       // the code table is full
+    code_int    free_ent;       // next free entry in codetab below
+    int         boff;           // whole bytes, counted in bits?
+    int         n_bits;         // number of bits per code
+    float       ratio;          // luxuriate in the floating point
+    long        checkpoint;
+    code_int    extcode;        // one more than the greatests code for n_bits
+
+    /*  This is the pairing of the code (ent) that represents
+        the prefix in the table along with the next byte (c).
+    */
+    union
     {
-#if BYTEORDER == 4321
-        char_type   b1;
-        char_type   b2;
-        char_type   b3;
-        char_type   b4;
-#else
-#if BYTEORDER == 1234
-        char_type   b4;
-        char_type   b3;
-        char_type   b2;
-        char_type   b1;
-#else
-#   undef   BYTEORDER
-        int             dummy;
-#endif
-#endif
-    } bytes;
-} ;
-#if BYTEORDER == 4321 && NOALLIGN == 1
-#define output(b,o,c,n) {                                                   \
-                            *(long *)&((b)[(o)>>3]) |= ((long)(c))<<((o)&0x7);\
-                            (o) += (n);                                     \
-                        }
-#else
-#ifdef BYTEORDER
-#define output(b,o,c,n) {   char_type  *p = &(b)[(o)>>3];              \
-                            union bytes i;                                  \
-                            i.word = ((long)(c))<<((o)&0x7);                \
-                            p[0] |= i.bytes.b1;                             \
-                            p[1] |= i.bytes.b2;                             \
-                            p[2] |= i.bytes.b3;                             \
-                            (o) += (n);                                     \
-                        }
-#else
-#define output(b,o,c,n) {   char_type  *p = &(b)[(o)>>3];              \
-                            long        i = ((long)(c))<<((o)&0x7);    \
-                            p[0] |= (char_type)(i);                         \
-                            p[1] |= (char_type)(i>>8);                      \
-                            p[2] |= (char_type)(i>>16);                     \
-                            (o) += (n);                                     \
-                        }
-#endif
-#endif
-#if BYTEORDER == 4321 && NOALLIGN == 1
-#define input(b,o,c,n,m){                                                   \
-                            (c) = (*(long *)(&(b)[(o)>>3])>>((o)&0x7))&(m); \
-                            (o) += (n);                                     \
-                        }
-#else
-#define input(b,o,c,n,m){   char_type      *p = &(b)[(o)>>3];          \
-                            (c) = ((((long)(p[0]))|((long)(p[1])<<8)|       \
-                                     ((long)(p[2])<<16))>>((o)&0x7))&(m);   \
-                            (o) += (n);                                     \
-                        }
-#endif
+        long      code;
+        struct
+        {
+            Byte  c;
+            unsigned short  ent;
+        } e;
+    } fcode;
 
-char            *progname;          /* Program name                                 */
-int             silent = 0;         /* don't tell me about errors                   */
-int             quiet = 1;          /* don't tell me about compression              */
-int             do_decomp = 0;      /* Decompress mode                              */
-int             force = 0;          /* Force overwrite of files and links           */
-int             nomagic = 0;        /* Use a 3-byte magic number header,            */
-                                    /* unless old file                              */
-int             block_mode = BLOCK_MODE;/* Block compress mode -C compatible with 2.0*/
-int             maxbits = BITS;     /* user settable max # bits/code                */
-int             zcat_flg = 0;       /* Write output on stdout, suppress messages    */
-int             recursive = 0;      /* compress directories                         */
-int             exit_code = -1;     /* Exitcode of compress (-1 no file compressed) */
+} compr_state;
 
-char_type       inbuf[IBUFSIZ+64];  /* Input buffer                                 */
-char_type       outbuf[OBUFSIZ+2048];/* Output buffer                               */
 
-struct stat     infstat;            /* Input file status                            */
-char            *ifname;            /* Input filename                               */
-int             remove_ofname = 0;  /* Remove output file on a error                */
-char            ofname[MAXPATHLEN]; /* Output filename                              */
-int             fgnd_flag = 0;      /* Running in background (SIGINT=SIGIGN)        */
-
-long            bytes_in;           /* Total number of byte from input              */
-long            bytes_out;          /* Total number of byte to output               */
+typedef struct decompr_state
+{
+    Byte        *stackp;
+    Byte        finchar;
+    code_int    oldcode;
+    int         posbits;
+    int         outpos;         // offset into outbuf
+    int         outwritten;     // offset into outbuf when flushing
+    int         insize;
+    int         bitmask;
+    code_int    free_ent;
+    code_int    maxcode;
+    code_int    maxmaxcode;
+    int         n_bits;
+    int         rsize;
+} decompr_state;
 
 /*
     To save much memory, we overlay the table used by compress() with those
@@ -320,18 +140,95 @@ long            bytes_out;          /* Total number of byte to output           
     possible stack (stack used to be 8000 characters).
 */
 
-count_int       htab[HSIZE];
-unsigned short  codetab[HSIZE];
+typedef struct cmp_internal_state
+{
+    int     decompress;
+    int     block_mode;     // Block compress mode -C compatible with 2.0
+    int     maxbits;        // user settable max # bits/code
 
-#define  htabof(i)               htab[i]
-#define  codetabof(i)            codetab[i]
-#define  tab_prefixof(i)         codetabof(i)
-#define  tab_suffixof(i)         ((char_type *)(htab))[i]
-#define  de_stack                ((char_type *)&(htab[HSIZE-1]))
-#define  clear_htab()            memset(htab, -1, sizeof(htab))
-#define  clear_tab_prefixof()    memset(codetab, 0, 256);
+    cmp_error_code  in_error;   // the state is in error, don't continue
 
-#ifdef FAST
+    count_int       htab[HSIZE];
+    unsigned short  codetab[HSIZE];
+
+    /*  For reasonable compatibility with the old code we operate
+        in these buffers and then transfer to or from the client's
+        buffers.
+    */
+    Byte    inbuf[IBUFSIZ_TOTAL];
+    Byte    outbuf[OBUFSIZ_TOTAL];
+    int     flushing;       // we are trying to flush
+
+    struct compr_state   cstate;
+    struct decompr_state dstate;
+
+} cmp_internal_state;
+
+
+#define  htabof(st, i)             st->htab[i]
+#define  codetabof(st, i)          st->codetab[i]
+#define  tab_prefixof(st, i)       codetabof(st, i)
+#define  tab_suffixof(st, i)       ((Byte *)(st->htab))[i]
+#define  de_stack(st)              ((Byte *)&(st->htab[HSIZE-1]))
+#define  clear_htab(st)            memset(st->htab, -1, HSIZE * sizeof(count_int))
+#define  clear_tab_prefixof(st)    memset(st->codetab, 0, 256);
+
+
+static void init_compr_state(cmp_internal_state* istate);
+
+
+
+static void
+init(cmp_stream* strm, int decompress)
+{
+    memset(strm, 0, sizeof(cmp_stream));
+
+    strm->state = (cmp_internal_state*)malloc(sizeof(cmp_internal_state));
+    memset(strm->state, 0, sizeof(cmp_internal_state));
+
+    strm->state->in_error   = CMP_OK;
+    strm->state->block_mode = BLOCK_MODE;
+    strm->state->maxbits    = BITS;
+    strm->state->decompress = decompress;
+
+    if (!decompress)
+    {
+        init_compr_state(strm->state);
+    }
+}
+
+
+
+cmp_error_code
+compress_init(cmp_stream* strm, int level)
+{
+    // REVISIT level is not used
+    init(strm, 0);
+    return CMP_OK;
+}
+
+
+
+cmp_error_code
+decompress_init(cmp_stream* strm, int level)
+{
+    init(strm, 1);
+    return CMP_OK;
+}
+
+
+
+void
+compress_free(cmp_stream* strm)
+{
+    if (strm->state)
+    {
+        free(strm->state);
+        strm->state = 0;
+    }
+}
+
+
 static int
 primetab[256] =     /* Special secondary hash table.     */
 {
@@ -368,19 +265,11 @@ primetab[256] =     /* Special secondary hash table.     */
     18233,-18307,18379,-18451,18523,-18637,18731,-18803,
     18919,-19031,19121,-19211,19273,-19381,19429,-19477
 } ;
-#endif
 
-int     main            ARGS((int,char **));
-void    comprexx        ARGS((char **));
-void    compdir         ARGS((char *));
-void    compress        ARGS((int,int));
-void    decompress      ARGS((int,int));
-void    read_error      ARGS((void));
-void    write_error     ARGS((void));
-void    abort_compress  ARGS((void));
-void    about           ARGS((void));
+//======================================================================
+// Compression
 
-/*****************************************************************
+/*
     Algorithm from "A Technique for High Performance Data Compression",
     Terry A. Welch, IEEE Computer Vol 17, No 6 (June 1984), pp 8-19.
 
@@ -391,626 +280,8 @@ void    about           ARGS((void));
     no input table, but tracks the way the table was built.
 */
 
-int
-main(argc, argv)
-    int      argc;
-    char    *argv[];
-{
-        char        **filelist;
-        char        **fileptr;
-
-        if (fgnd_flag = (signal(SIGINT, SIG_IGN) != SIG_IGN))
-            signal(SIGINT, (SIG_TYPE)abort_compress);
-
-        signal(SIGTERM, (SIG_TYPE)abort_compress);
-#ifndef DOS
-        signal(SIGHUP, (SIG_TYPE)abort_compress);
-#endif
-
-#ifdef COMPATIBLE
-        nomagic = 1;    /* Original didn't have a magic number */
-#endif
-
-        filelist = (char **)malloc(argc*sizeof(char *));
-        if (filelist == NULL)
-        {
-            fprintf(stderr, "Cannot allocate memory for file list.\n");
-            exit (1);
-        }
-        fileptr = filelist;
-        *filelist = NULL;
-
-        if((progname = strrchr(argv[0], '/')) != 0)
-            progname++;
-        else
-            progname = argv[0];
-
-        if (strcmp(progname, "uncompress") == 0)
-            do_decomp = 1;
-        else
-        if (strcmp(progname, "zcat") == 0)
-            do_decomp = zcat_flg = 1;
-
-        /* Argument Processing
-         * All flags are optional.
-         * -V => print Version; debug verbose
-         * -d => do_decomp
-         * -v => unquiet
-         * -f => force overwrite of output file
-         * -n => no header: useful to uncompress old files
-         * -b maxbits => maxbits.  If -b is specified, then maxbits MUST be given also.
-         * -c => cat all output to stdout
-         * -C => generate output compatible with compress 2.0.
-         * -r => recursively compress directories
-         * if a string is left, must be an input filename.
-         */
-
-        for (argc--, argv++; argc > 0; argc--, argv++)
-        {
-            if (**argv == '-')
-            {/* A flag argument */
-                while (*++(*argv))
-                {/* Process all flags in this arg */
-                    switch (**argv)
-                    {
-                    case 'V':
-                        about();
-                        break;
-
-                    case 's':
-                        silent = 1;
-                        quiet = 1;
-                        break;
-
-                    case 'v':
-                        silent = 0;
-                        quiet = 0;
-                        break;
-
-                    case 'd':
-                        do_decomp = 1;
-                        break;
-
-                    case 'f':
-                    case 'F':
-                        force = 1;
-                        break;
-
-                    case 'n':
-                        nomagic = 1;
-                        break;
-
-                    case 'C':
-                        block_mode = 0;
-                        break;
-
-                    case 'b':
-                        if (!ARGVAL())
-                        {
-                            fprintf(stderr, "Missing maxbits\n");
-                        }
-
-                        maxbits = atoi(*argv);
-                        goto nextarg;
-
-                    case 'c':
-                        zcat_flg = 1;
-                        break;
-
-                    case 'q':
-                        quiet = 1;
-                        break;
-                    case 'r':
-                    case 'R':
-#ifdef  RECURSIVE
-                        recursive = 1;
-#else
-                        fprintf(stderr, "%s -r not available (due to missing directory functions)\n", *argv);
-#endif
-                        break;
-
-                    default:
-                        fprintf(stderr, "Unknown flag: '%c'; ", **argv);
-                    }
-                }
-            }
-            else
-            {
-                *fileptr++ = *argv; /* Build input file list */
-                *fileptr = NULL;
-            }
-
-nextarg:    continue;
-        }
-
-        if (maxbits < INIT_BITS)    maxbits = INIT_BITS;
-        if (maxbits > BITS)         maxbits = BITS;
-
-        if (*filelist != NULL)
-        {
-            for (fileptr = filelist; *fileptr; fileptr++)
-                comprexx(fileptr);
-        }
-        else
-        {/* Standard input */
-            ifname = "";
-            exit_code = 0;
-            remove_ofname = 0;
-
-            if (do_decomp == 0)
-            {
-                compress(0, 1);
-
-                if (zcat_flg == 0 && !quiet)
-                {
-                }
-
-                if (bytes_out >= bytes_in && !(force))
-                    exit_code = 2;
-            }
-            else
-                decompress(0, 1);
-        }
-
-        exit((exit_code== -1) ? 1:exit_code);
-}
-
-
-
-void
-comprexx(char **fileptr)
-{
-        int     fdin;
-        int     fdout;
-        char    tempname[MAXPATHLEN];
-
-        if (strlen(*fileptr) > sizeof(tempname) - 3) {
-            fprintf(stderr, "Pathname too long: %s\n", *fileptr);
-            exit_code = 1;
-            return;
-        }
-
-        strcpy(tempname,*fileptr);
-        errno = 0;
-
-#ifdef  LSTAT
-        if (lstat(tempname,&infstat) == -1)
-#else
-        if (stat(tempname,&infstat) == -1)
-#endif
-        {
-            if (do_decomp)
-            {
-                switch (errno)
-                {
-                case ENOENT:    /* file doesn't exist */
-                    /*
-                    ** if the given name doesn't end with .Z, try appending one
-                    ** This is obviously the wrong thing to do if it's a 
-                    ** directory, but it shouldn't do any harm.
-                    */
-                    if (strcmp(tempname + strlen(tempname) - 2, ".Z") != 0)
-                    {
-                        strcat(tempname,".Z");
-                        errno = 0;
-#ifdef  LSTAT
-                        if (lstat(tempname,&infstat) == -1)
-#else
-                        if (stat(tempname,&infstat) == -1)
-#endif
-                        {
-                            perror(tempname);
-                            exit_code = 1;
-                            return;
-                        }
-
-                        if ((infstat.st_mode & S_IFMT) != S_IFREG)
-                        {
-                            fprintf(stderr, "%s: Not a regular file.\n", tempname);
-                            exit_code = 1;
-                            return ;
-                        }
-                    }
-                    else
-                    {
-                        perror(tempname);
-                        exit_code = 1;
-                        return;
-                    }
-
-                    break;
-
-                default:
-                    perror(tempname);
-                    exit_code = 1;
-                    return;
-                }
-            }
-            else
-            {
-                perror(tempname);
-                exit_code = 1;
-                return;
-            }
-        }
-
-        switch (infstat.st_mode & S_IFMT)
-        {
-        case S_IFDIR:   /* directory */
-#ifdef  RECURSIVE
-            if (recursive)
-                compdir(tempname);
-            else
-#endif
-            if (!quiet)
-                fprintf(stderr,"%s is a directory -- ignored\n", tempname);
-            break;
-
-        case S_IFREG:   /* regular file */
-            if (do_decomp != 0)
-            {/* DECOMPRESSION */
-                if (!zcat_flg)
-                {
-                    if (strcmp(tempname + strlen(tempname) - 2, ".Z") != 0)
-                    {
-                        if (!quiet)
-                            fprintf(stderr,"%s - no .Z suffix\n",tempname);
-
-                        return;
-                    }
-                }
-
-                strcpy(ofname, tempname);
-
-                /* Strip of .Z suffix */
-
-                if (strcmp(tempname + strlen(tempname) - 2, ".Z") == 0)
-                    ofname[strlen(tempname) - 2] = '\0';
-            }
-            else
-            {/* COMPRESSION */
-                if (!zcat_flg)
-                {
-                    if (strcmp(tempname + strlen(tempname) - 2, ".Z") == 0)
-                    {
-                        fprintf(stderr, "%s: already has .Z suffix -- no change\n", tempname);
-                        return;
-                    }
-
-                    if (infstat.st_nlink > 1 && (!force))
-                    {
-                        fprintf(stderr, "%s has %jd other links: unchanged\n",
-                                        tempname, (intmax_t)(infstat.st_nlink - 1));
-                        exit_code = 1;
-                        return;
-                    }
-                }
-
-                strcpy(ofname, tempname);
-                strcat(ofname, ".Z");
-            }
-
-            if ((fdin = open(ifname = tempname, O_RDONLY)) == -1)
-            {
-                perror(tempname);
-                exit_code = 1;
-                return;
-            }
-
-            if (zcat_flg == 0)
-            {
-                int             c;
-                int             s;
-                struct stat     statbuf;
-                struct stat     statbuf2;
-
-                if (stat(ofname, &statbuf) == 0)
-                {
-                    if ((s = strlen(ofname)) > 8)
-                    {
-                        c = ofname[s-1];
-                        ofname[s-1] = '\0';
-
-                        statbuf2 = statbuf;
-
-                        if (!stat(ofname, &statbuf2) &&
-                            statbuf.st_mode  == statbuf2.st_mode &&
-                            statbuf.st_ino   == statbuf2.st_ino &&
-                            statbuf.st_dev   == statbuf2.st_dev &&
-                            statbuf.st_uid   == statbuf2.st_uid &&
-                            statbuf.st_gid   == statbuf2.st_gid &&
-                            statbuf.st_size  == statbuf2.st_size &&
-                            statbuf.st_atime == statbuf2.st_atime &&
-                            statbuf.st_mtime == statbuf2.st_mtime &&
-                            statbuf.st_ctime == statbuf2.st_ctime)
-                        {
-                            fprintf(stderr, "%s: filename too long to tack on .Z\n", tempname);
-                            exit_code = 1;
-                            return;
-                        }
-
-                        ofname[s-1] = (char)c;
-                    }
-
-                    if (!force)
-                    {
-                        inbuf[0] = 'n';
-
-                        fprintf(stderr, "%s already exists.\n", ofname);
-
-                        if (fgnd_flag && isatty(0))
-                        {
-                            fprintf(stderr, "Do you wish to overwrite %s (y or n)? ", ofname);
-                            fflush(stderr);
-    
-                            if (read(0, inbuf, 1) > 0)
-                            {
-                                if (inbuf[0] != '\n')
-                                {
-                                    do
-                                    {
-                                        if (read(0, inbuf+1, 1) <= 0)
-                                        {
-                                            perror("stdin");
-                                            break;
-                                        }
-                                    }
-                                    while (inbuf[1] != '\n');
-                                }
-                            }
-                            else
-                                perror("stdin");
-                        }
-
-                        if (inbuf[0] != 'y')
-                        {
-                            fprintf(stderr, "%s not overwritten\n", ofname);
-                            exit_code = 1;
-                            return;
-                        }
-                    }
-
-                    if (unlink(ofname))
-                    {
-                        fprintf(stderr, "Can't remove old output file\n");
-                        perror(ofname);
-                        exit_code = 1;
-                        return ;
-                    }
-                }
-
-                if ((fdout = open(ofname, O_WRONLY|O_CREAT|O_EXCL,0600)) == -1)
-                {
-                    perror(tempname);
-                    return;
-                }
-
-                if ((s = strlen(ofname)) > 8)
-                {
-                    if (fstat(fdout, &statbuf))
-                    {
-                        fprintf(stderr, "Can't get status op output file\n");
-                        perror(ofname);
-                        exit_code = 1;
-                        return ;
-                    }
-
-                    c = ofname[s-1];
-                    ofname[s-1] = '\0';
-                    statbuf2 = statbuf;
-
-                    if (!stat(ofname, &statbuf2) &&
-                        statbuf.st_mode  == statbuf2.st_mode &&
-                        statbuf.st_ino   == statbuf2.st_ino &&
-                        statbuf.st_dev   == statbuf2.st_dev &&
-                        statbuf.st_uid   == statbuf2.st_uid &&
-                        statbuf.st_gid   == statbuf2.st_gid &&
-                        statbuf.st_size  == statbuf2.st_size &&
-                        statbuf.st_atime == statbuf2.st_atime &&
-                        statbuf.st_mtime == statbuf2.st_mtime &&
-                        statbuf.st_ctime == statbuf2.st_ctime)
-                    {
-                        fprintf(stderr, "%s: filename too long to tack on .Z\n", tempname);
-
-                        if (unlink(ofname))
-                        {
-                            fprintf(stderr, "can't remove bad output file\n");
-                            perror(ofname);
-                        }
-                        exit_code = 1;
-                        return;
-                    }
-
-                    ofname[s-1] = (char)c;
-                }
-
-                if(!quiet)
-                    fprintf(stderr, "%s: ", tempname);
-
-                remove_ofname = 1;
-            }
-            else
-            {
-                fdout = 1;
-                ofname[0] = '\0';
-                remove_ofname = 0;
-            }
-
-            if (do_decomp == 0)
-                compress(fdin, fdout);
-            else
-                decompress(fdin, fdout);
-
-            close(fdin);
-
-            if (fdout != 1 && close(fdout))
-                write_error();
-
-            if ( (bytes_in == 0) && (force == 0 ) )
-            {
-                if (remove_ofname)
-                {
-                    if(!quiet)
-                        fprintf(stderr, "No compression -- %s unchanged\n", ifname);
-                    if (unlink(ofname)) /* Remove input file */
-                    {
-                        fprintf(stderr, "\nunlink error (ignored) ");
-                        perror(ofname);
-                        exit_code = 1;
-                    }
-        
-                    remove_ofname = 0;
-                    exit_code = 2;
-                }
-            }
-            else
-            if (zcat_flg == 0)
-            {
-                struct utimbuf  timep;
-
-                if (!do_decomp && bytes_out >= bytes_in && (!force))
-                {/* No compression: remove file.Z */
-                    if(!quiet)
-                        fprintf(stderr, "No compression -- %s unchanged\n", ifname);
-
-                    if (unlink(ofname))
-                    {
-                        fprintf(stderr, "unlink error (ignored) ");
-                        perror(ofname);
-                    }
-
-                    remove_ofname = 0;
-                    exit_code = 2;
-                }
-                else
-                {/* ***** Successful Compression ***** */
-                    if(!quiet)
-                    {
-                        fprintf(stderr, " -- replaced with %s",ofname);
-
-                        if (!do_decomp)
-                        {
-                        }
-
-                        fprintf(stderr, "\n");
-                    }
-
-                    timep.actime = infstat.st_atime;
-                    timep.modtime = infstat.st_mtime;
-
-                    if (utime(ofname, &timep))
-                    {
-                        fprintf(stderr, "\nutime error (ignored) ");
-                        perror(ofname);
-                        exit_code = 1;
-                    }
-
-#ifndef AMIGA
-                    if (chmod(ofname, infstat.st_mode & 07777))     /* Copy modes */
-                    {
-                        fprintf(stderr, "\nchmod error (ignored) ");
-                        perror(ofname);
-                        exit_code = 1;
-                    }
-#ifndef DOS
-                    if (chown(ofname, infstat.st_uid, infstat.st_gid))  /* Copy ownership */
-                    {
-                        fprintf(stderr, "\nchown error (ignored) ");
-                        perror(ofname);
-                        exit_code = 1;
-                    }
-#endif
-#endif
-                    remove_ofname = 0;
-
-                    if (unlink(ifname)) /* Remove input file */
-                    {
-                        fprintf(stderr, "\nunlink error (ignored) ");
-                        perror(ifname);
-                        exit_code = 1;
-                    }
-                }
-            }
-
-            if (exit_code == -1)
-                exit_code = 0;
-
-            break;
-
-        default:
-            fprintf(stderr,"%s is not a directory or a regular file - ignored\n",
-                    tempname);
-            break;
-        }
-}
-
-
-
-#ifdef  RECURSIVE
-void
-compdir(dir)
-    REG3    char    *dir;
-{
-#ifndef DIRENT
-        REG1    struct direct   *dp;
-#else
-        REG1    struct dirent   *dp;
-#endif
-        REG2    DIR             *dirp;
-        char                     nbuf[MAXPATHLEN];
-        char                    *nptr = nbuf;
-
-        dirp = opendir(dir);
-
-        if (dirp == NULL)
-        {
-            printf("%s unreadable\n", dir);     /* not stderr! */
-            return ;
-        }
-        /*
-        ** WARNING: the following algorithm will occasionally cause
-        ** compress to produce error warnings of the form "<filename>.Z
-        ** already has .Z suffix - ignored". This occurs when the
-        ** .Z output file is inserted into the directory below
-        ** readdir's current pointer.
-        ** These warnings are harmless but annoying. The alternative
-        ** to allowing this would be to store the entire directory
-        ** list in memory, then compress the entries in the stored
-        ** list. Given the depth-first recursive algorithm used here,
-        ** this could use up a tremendous amount of memory. I don't
-        ** think it's worth it. -- Dave Mack
-        */
-
-        while (dp = readdir(dirp))
-        {
-            if (dp->d_ino == 0)
-                continue;
-
-            if (strcmp(dp->d_name,".") == 0 || strcmp(dp->d_name,"..") == 0)
-                continue;
-
-            if ((strlen(dir)+strlen(dp->d_name)+1) < (MAXPATHLEN - 1))
-            {
-                strcpy(nbuf,dir);
-                strcat(nbuf,"/");
-                strcat(nbuf,dp->d_name);
-                comprexx(&nptr);
-            }
-            else
-                fprintf(stderr,"Pathname too long: %s/%s\n", dir, dp->d_name);
-        }
-
-        closedir(dirp);
-
-        return;
-}
-#endif
-
-
 
 /*
-    compress fdin to fdout
-
     Algorithm:  use open addressing double hashing (no chaining) on the
     prefix code / next character combination.
 
@@ -1032,251 +303,477 @@ compdir(dir)
 
 */
 
-void
-compress(int fdin, int fdout)
+
+static void
+output(cmp_internal_state* istate, code_int code)
 {
-    long        hp;
-    int         rpos;
-#if REGISTERS >= 5
-    REG5    long        fc;
-#endif
-    int         outbits;
-    int         rlop;
-    int         rsize;
-    int         stcode;
-    code_int    free_ent;
-    int         boff;
-    int         n_bits;
-    int         ratio;
-    long        checkpoint;
-    code_int    extcode;
-    union
-    {
-        long            code;
-        struct
-        {
-            char_type       c;
-            unsigned short  ent;
-        } e;
-    } fcode;
+    /*  Write the code updating the outbuf and compression state.
+        We are writing bit-wise so the code must be merged with
+        the partial byte at the end of the buffer.
 
-    ratio = 0;
-    checkpoint = CHECK_GAP;
-    extcode = MAXCODE(n_bits = INIT_BITS)+1;
-    stcode = 1;
-    free_ent = FIRST;
+        The code is up to 16 bits wide.
+    */
+    compr_state *cs = &istate->cstate;
 
-    memset(outbuf, 0, sizeof(outbuf));
-    bytes_out = 0; bytes_in = 0;
-    outbuf[0] = MAGIC_1;
-    outbuf[1] = MAGIC_2;
-    outbuf[2] = (char)(maxbits | block_mode);
-    boff = outbits = (3<<3);
-    fcode.code = 0;
+    Byte  *p = &istate->outbuf[cs->outbits >> 3];
+    long   i = ((long)code) << (cs->outbits & 0x7);
 
-    clear_htab();
+    p[0] |= (Byte)(i);
+    p[1] |= (Byte)(i >> 8);
+    p[2] |= (Byte)(i >> 16);    // these might not be used
 
-    while ((rsize = read(fdin, inbuf, IBUFSIZ)) > 0)
-    {
-        if (bytes_in == 0)
-        {
-            fcode.e.ent = inbuf[0];
-            rpos = 1;
-        }
-        else
-            rpos = 0;
-
-        rlop = 0;
-
-        do
-        {
-            if (free_ent >= extcode && fcode.e.ent < FIRST)
-            {
-                if (n_bits < maxbits)
-                {
-                    boff = outbits = (outbits-1)+((n_bits<<3)-
-                                ((outbits-boff-1+(n_bits<<3))%(n_bits<<3)));
-                    if (++n_bits < maxbits)
-                        extcode = MAXCODE(n_bits)+1;
-                    else
-                        extcode = MAXCODE(n_bits);
-                }
-                else
-                {
-                    extcode = MAXCODE(16)+OBUFSIZ;
-                    stcode = 0;
-                }
-            }
-
-            if (!stcode && bytes_in >= checkpoint && fcode.e.ent < FIRST)
-            {
-                long int rat;
-
-                checkpoint = bytes_in + CHECK_GAP;
-
-                if (bytes_in > 0x007fffff)
-                {                           /* shift will overflow */
-                    rat = (bytes_out+(outbits>>3)) >> 8;
-
-                    if (rat == 0)               /* Don't divide by zero */
-                        rat = 0x7fffffff;
-                    else
-                        rat = bytes_in / rat;
-                }
-                else
-                    rat = (bytes_in << 8) / (bytes_out+(outbits>>3));   /* 8 fractional bits */
-                if (rat >= ratio)
-                    ratio = (int)rat;
-                else
-                {
-                    ratio = 0;
-                    clear_htab();
-                    output(outbuf,outbits,CLEAR,n_bits);
-                    boff = outbits = (outbits-1)+((n_bits<<3)-
-                                ((outbits-boff-1+(n_bits<<3))%(n_bits<<3)));
-                    extcode = MAXCODE(n_bits = INIT_BITS)+1;
-                    free_ent = FIRST;
-                    stcode = 1;
-                }
-            }
-
-            if (outbits >= (OBUFSIZ<<3))
-            {
-                if (write(fdout, outbuf, OBUFSIZ) != OBUFSIZ)
-                    write_error();
-
-                outbits -= (OBUFSIZ<<3);
-                boff = -(((OBUFSIZ<<3)-boff)%(n_bits<<3));
-                bytes_out += OBUFSIZ;
-
-                memcpy(outbuf, outbuf+OBUFSIZ, (outbits>>3)+1);
-                memset(outbuf+(outbits>>3)+1, '\0', OBUFSIZ);
-            }
-
-            {
-                int     i;
-
-                i = rsize-rlop;
-
-                if ((code_int)i > extcode-free_ent) i = (int)(extcode-free_ent);
-                if (i > ((sizeof(outbuf) - 32)*8 - outbits)/n_bits)
-                    i = ((sizeof(outbuf) - 32)*8 - outbits)/n_bits;
-                
-                if (!stcode && (long)i > checkpoint-bytes_in)
-                    i = (int)(checkpoint-bytes_in);
-
-                rlop += i;
-                bytes_in += i;
-            }
-
-            goto next;
-hfound:         fcode.e.ent = codetabof(hp);
-next:           if (rpos >= rlop)
-                goto endlop;
-next2:          fcode.e.c = inbuf[rpos++];
-#ifndef FAST
-            {
-                code_int    i;
-#if REGISTERS >= 5
-                fc = fcode.code;
-#else
-#   define          fc fcode.code
-#endif
-                hp = (((long)(fcode.e.c)) << (BITS-8)) ^ (long)(fcode.e.ent);
-
-                if ((i = htabof(hp)) == fc)
-                    goto hfound;
-
-                if (i != -1)
-                {
-                    REG4 long       disp;
-
-                    disp = (HSIZE - hp)-1;  /* secondary hash (after G. Knott) */
-
-                    do
-                    {
-                        if ((hp -= disp) < 0)   hp += HSIZE;
-
-                        if ((i = htabof(hp)) == fc)
-                            goto hfound;
-                    }
-                    while (i != -1);
-                }
-            }
-#else
-            {
-                long   i;
-                long   p;
-#if REGISTERS >= 5
-                fc = fcode.code;
-#else
-#   define          fc fcode.code
-#endif
-                hp = ((((long)(fcode.e.c)) << (HBITS-8)) ^ (long)(fcode.e.ent));
-
-                if ((i = htabof(hp)) == fc) goto hfound;
-                if (i == -1)                goto out;
-
-                p = primetab[fcode.e.c];
-lookup:             hp = (hp+p)&HMASK;
-                if ((i = htabof(hp)) == fc) goto hfound;
-                if (i == -1)                goto out;
-                hp = (hp+p)&HMASK;
-                if ((i = htabof(hp)) == fc) goto hfound;
-                if (i == -1)                goto out;
-                hp = (hp+p)&HMASK;
-                if ((i = htabof(hp)) == fc) goto hfound;
-                if (i == -1)                goto out;
-                goto lookup;
-            }
-out:            ;
-#endif
-            output(outbuf,outbits,fcode.e.ent,n_bits);
-
-            {
-#if REGISTERS < 5
-#   undef   fc
-                long   fc;
-                fc = fcode.code;
-#endif
-                fcode.e.ent = fcode.e.c;
-
-
-                if (stcode)
-                {
-                    codetabof(hp) = (unsigned short)free_ent++;
-                    htabof(hp) = fc;
-                }
-            } 
-
-            goto next;
-
-endlop:         if (fcode.e.ent >= FIRST && rpos < rsize)
-                goto next2;
-
-            if (rpos > rlop)
-            {
-                bytes_in += rpos-rlop;
-                rlop = rpos;
-            }
-        }
-        while (rlop < rsize);
-    }
-
-    if (rsize < 0)
-        read_error();
-
-    if (bytes_in > 0)
-        output(outbuf,outbits,fcode.e.ent,n_bits);
-
-    if (write(fdout, outbuf, (outbits+7)>>3) != (outbits+7)>>3)
-        write_error();
-
-    bytes_out += (outbits+7)>>3;
-
-    return;
+    cs->outbits += cs->n_bits;
 }
 
+
+
+static int
+flush_compress(cmp_stream* strm, cmp_flush_code flush)
+{
+    /*  Flush some bytes to the client.
+        This will set the flushing = true if there is still more to flush.
+        It returns the flushing flag.
+
+        If flush == CMP_FINISH then we flush the last bits out.
+    */
+    cmp_internal_state* istate = strm->state;
+    compr_state*        cs     = &istate->cstate;
+    size_t              num;
+
+    // The number of whole bytes to write
+    num = cs->outbits >> 3;
+
+    if (flush == CMP_FINISH && cs->outbits & 0x7)
+    {
+        // Round up to a byte
+        ++num;
+    }
+
+    if (num > strm->avail_out)
+    {
+        num = strm->avail_out;
+    }
+
+    if (num > 0)
+    {
+        memcpy(strm->next_out, istate->outbuf, num);
+
+        cs->outbits -= num << 3;
+        cs->boff     = -( ((num<<3) - cs->boff) % (cs->n_bits<<3));
+
+        if (cs->outbits > 0)
+        {
+            // Preserve (cs->outbits>>3) + 1 bytes which may include a fragment of bits
+            memcpy(istate->outbuf, istate->outbuf + num, (cs->outbits>>3) + 1);
+            memset(istate->outbuf + (cs->outbits>>3) + 1, '\0', num);
+        }
+        else
+        if (cs->outbits < 0)
+        {
+            // we must have flushed everything
+            cs->outbits = 0;
+        }
+
+        strm->next_out  += num;
+        strm->avail_out -= num;
+        strm->total_out += num;
+    }
+
+    istate->flushing = (num > 0);
+    return istate->flushing;
+}
+
+
+
+static void
+init_compr_state(cmp_internal_state* istate)
+{
+    compr_state* cs = &istate->cstate;
+
+    cs->ratio      = 0.0;
+    cs->checkpoint = CHECK_GAP;
+    cs->n_bits     = INIT_BITS;
+    cs->extcode    = MAXCODE(cs->n_bits) + 1;
+    cs->codefull   = 0;
+    cs->free_ent   = FIRST;
+    cs->fcode.code = 0;
+
+    memset(istate->outbuf, 0, OBUFSIZ_TOTAL);
+
+    // Put a header
+    istate->outbuf[0] = MAGIC_1;
+    istate->outbuf[1] = MAGIC_2;
+    istate->outbuf[2] = (char)(istate->maxbits | istate->block_mode);
+
+    // We've generated 3 bytes.
+    cs->boff = cs->outbits = (3<<3);
+
+    clear_htab(istate);
+}
+
+
+
+cmp_error_code
+compress(
+    cmp_stream*     strm,
+    cmp_flush_code  flush
+    )
+{
+    cmp_internal_state* istate = strm->state;
+
+    compr_state* cs = &istate->cstate;
+    long         hp;
+
+    if (istate->in_error != CMP_OK)
+    {
+        return istate->in_error;
+    }
+
+    if (istate->flushing)
+    {
+        // continue flushing
+        if (flush_compress(strm, flush) > 0)
+        {
+            return CMP_OK;
+        }
+    }
+
+    if (strm->avail_in == 0)
+    {
+        if (cs->outbits > 0)
+        {
+            // We still have something to flush
+            flush_compress(strm, flush);
+        }
+
+        return istate->flushing? CMP_OK : CMP_STREAM_END;
+    }
+
+    /*  In the following, rpos will be relative to the section of the
+        buffer starting at where we are now. rlop points further along to
+        the end of the section that can be processed in this run.
+    */
+    if (cs->rpos >= cs->rlop)
+    {
+        // We need more
+        cs->rsize = strm->avail_in;
+
+        if (strm->total_in == 0)
+        {
+            // Start off the prefix string with the first byte
+            cs->fcode.e.ent = *strm->next_in++;
+            strm->avail_in -= 1;
+            cs->rpos = 1;
+        }
+        else
+            cs->rpos = 0;
+
+        cs->rlop = 0;
+    }
+
+    do
+    {
+        if (cs->free_ent >= cs->extcode && cs->fcode.e.ent < FIRST)
+        {
+            if (cs->n_bits < istate->maxbits)
+            {
+                // Automatically increase the number of bits per code
+                int nb = cs->n_bits << 3;
+
+                cs->boff = cs->outbits =
+                    cs->outbits - 1 + nb - (cs->outbits - cs->boff - 1 + nb) % nb;
+
+                if (++cs->n_bits < istate->maxbits)
+                    cs->extcode = MAXCODE(cs->n_bits)+1;
+                else
+                    cs->extcode = MAXCODE(cs->n_bits);
+            }
+            else
+            {
+                // Can't be increased. Don't store new codes.
+                cs->extcode  = MAXCODE(16) + OBUFSIZ;
+                cs->codefull = 1;
+            }
+        }
+
+        if (cs->codefull && strm->total_in >= cs->checkpoint && cs->fcode.e.ent < FIRST)
+        {
+            // The string table is full. We empty it if the compression ratio goes down.
+            float rat = strm->total_in;
+
+            cs->checkpoint = strm->total_in + CHECK_GAP;
+
+            if (strm->total_out == 0)
+            {
+                rat = 1.0;
+            }
+            else
+            {
+                rat /= strm->total_out;
+            }
+
+            if (rat >= cs->ratio)
+            {
+                cs->ratio = rat;
+            }
+            else
+            {
+                cs->ratio = 0.0;
+                clear_htab(istate);
+
+                output(istate, CLEAR);
+
+                {
+                    int nb = cs->n_bits << 3;
+
+                    cs->boff = cs->outbits =
+                        cs->outbits - 1 + nb - ((cs->outbits - cs->boff - 1 + nb) % nb);
+                }
+
+                cs->extcode  = MAXCODE(cs->n_bits = INIT_BITS)+1;
+                cs->free_ent = FIRST;
+                cs->codefull = 0;
+            }
+        }
+
+        if (cs->outbits >= (OBUFSIZ<<3))
+        {
+            if (flush_compress(strm, flush))
+            {
+                return CMP_OK;
+            }
+        }
+
+        {
+            /*  Find out how many input bytes we can handle
+                without overflowing the output buffer.
+            */
+            int i;
+
+            i = cs->rsize - cs->rlop;
+
+            if ((code_int)i > cs->extcode - cs->free_ent)
+            {
+                i = (int)(cs->extcode - cs->free_ent);
+            }
+
+            if (i > ((OBUFSIZ_TOTAL - 32)*8 - cs->outbits) / cs->n_bits)
+            {
+                i = ((OBUFSIZ_TOTAL - 32)*8 - cs->outbits) / cs->n_bits;
+            }
+
+            if (cs->codefull && (long)i > cs->checkpoint - strm->total_in)
+            {
+                i = (int)(cs->checkpoint - strm->total_in);
+            }
+
+            cs->rlop += i;
+
+            strm->total_in += i;
+        }
+
+        goto next;
+
+hfound: cs->fcode.e.ent = codetabof(istate, hp);
+
+next:   if (cs->rpos >= cs->rlop)
+        {
+            goto endlop;
+        }
+
+next2:  cs->fcode.e.c = *strm->next_in++;
+        strm->avail_in -= 1;
+        cs->rpos++;
+
+        // fcode contains the code for the string so far plus the new byte
+        // See if this pair is in the table
+        {
+            long   i;
+            long   p;
+            long   fc = cs->fcode.code;
+            hp = ((((long)(cs->fcode.e.c)) << (HBITS-8)) ^ (long)(cs->fcode.e.ent));
+
+            if ((i = htabof(istate, hp)) == fc) goto hfound;
+            if (i == -1)                goto out;
+
+            p = primetab[cs->fcode.e.c];
+
+lookup:     hp = (hp+p)&HMASK;
+            if ((i = htabof(istate, hp)) == fc) goto hfound;
+            if (i == -1)                goto out;
+
+            hp = (hp+p)&HMASK;
+            if ((i = htabof(istate, hp)) == fc) goto hfound;
+            if (i == -1)                goto out;
+
+            hp = (hp+p)&HMASK;
+            if ((i = htabof(istate, hp)) == fc) goto hfound;
+            if (i == -1)                goto out;
+
+            goto lookup;
+        }
+out:    ;
+
+        // Not in the string table, output a code and start a new string
+        output(istate, cs->fcode.e.ent);
+
+        {
+            long fc = cs->fcode.code;   // save fcode
+
+            cs->fcode.e.ent = cs->fcode.e.c; // the byte becomes the string
+
+            if (!cs->codefull)
+            {
+                codetabof(istate, hp) = (unsigned short)cs->free_ent++;
+                htabof(istate, hp) = fc;
+            }
+        }
+
+        goto next;
+
+endlop: if (cs->fcode.e.ent >= FIRST && cs->rpos < cs->rsize)
+        {
+            goto next2;
+        }
+
+        if (cs->rpos > cs->rlop)
+        {
+            strm->total_in += cs->rpos - cs->rlop;
+            cs->rlop = cs->rpos;
+        }
+    }
+    while (cs->rlop < cs->rsize);
+
+    if (strm->total_in > 0)
+    {
+        output(istate, cs->fcode.e.ent);
+    }
+
+    return CMP_OK;
+}
+
+
+//======================================================================
+// Decompression
+
+
+static code_int
+input(cmp_internal_state* istate)
+{
+    decompr_state *ds = &istate->dstate;
+    code_int      code;
+
+    Byte *p = &istate->inbuf[ds->posbits >> 3];
+    long  v = ((long)(p[0])) | ((long)(p[1]) << 8) | ((long)(p[2]) << 16);
+
+    code = (v >> (ds->posbits & 0x7)) & ds->bitmask;
+    ds->posbits += ds->n_bits;
+
+    return code;
+}
+
+
+static size_t
+flush_decompress(cmp_stream* strm)
+{
+    /*  Flush from outbuf to the client. Keep going
+        until ds->outwritten becomes ds->outpos.
+        Return the number of bytes flushed.
+    */
+    cmp_internal_state* istate = strm->state;
+    decompr_state*      ds  = &istate->dstate;
+    size_t              num = 0;
+
+    if (ds->outwritten < ds->outpos)
+    {
+        num = ds->outpos - ds->outwritten;
+
+        if (num > strm->avail_out)
+        {
+            num = strm->avail_out;
+        }
+
+        if (num > 0)
+        {
+            memcpy(strm->next_out, istate->outbuf + ds->outwritten, num);
+            ds->outwritten += num;
+        }
+    }
+
+    if (num == 0)
+    {
+        istate->flushing = 0;
+        ds->outpos = 0;
+    }
+
+    return num;
+}
+
+
+
+static int
+append_string(cmp_stream* strm)
+{
+    /*  See if there is more of a string to be flushed
+        to the output. This returns 1 if something was
+        appended.
+    */
+    cmp_internal_state* istate = strm->state;
+    decompr_state*      ds     = &istate->dstate;
+    int  i;
+
+    if (!ds->stackp)
+    {
+        return 0;
+    }
+
+    // The number of bytes in the string
+    i = de_stack(istate) - ds->stackp;
+
+    if (i <= 0)
+    {
+        return 0;
+    }
+
+    if (ds->outpos + i >= OBUFSIZ)
+    {
+        /*  There is no room for a simple copy. We must copy
+            some. We couldn't just empty the buffer to fit
+            the string as it may be too big for the buffer.
+        */
+        do
+        {
+            if (i > OBUFSIZ - ds->outpos)
+            {
+                i = OBUFSIZ - ds->outpos;
+            }
+
+            if (i > 0)
+            {
+                // There is room for a partial copy
+                memcpy(istate->outbuf + ds->outpos, ds->stackp, i);
+                ds->outpos += i;
+            }
+
+            if (ds->outpos >= OBUFSIZ)
+            {
+                istate->flushing = 1;
+                ds->outwritten   = 0;
+                flush_decompress(strm);
+            }
+
+            ds->stackp += i;
+        }
+        while ((i = (de_stack(istate) - ds->stackp)) > 0);
+    }
+    else
+    {
+        memcpy(istate->outbuf + ds->outpos, ds->stackp, i);
+        ds->outpos += i;
+    }
+
+    return i > 0;
+}
 
 
 /*
@@ -1286,253 +783,250 @@ endlop:         if (fcode.e.ent >= FIRST && rpos < rsize)
     with those of the compress() routine.  See the definitions above.
 */
 
-void
-decompress(int fdin, int fdout)
+cmp_error_code
+decompress(
+    cmp_stream*     strm,
+    cmp_flush_code  flush
+    )
 {
-    char_type       *stackp;
-    code_int         code;
-    int              finchar;
-    code_int         oldcode;
-    code_int         incode;
-    int              inbits;
-    int              posbits;
-    int              outpos;
-    int              insize;
-    int              bitmask;
-    code_int         free_ent;
-    code_int         maxcode;
-    code_int         maxmaxcode;
-    int              n_bits;
-    int              rsize;
+    cmp_internal_state* istate = strm->state;
+    decompr_state*      ds     = &istate->dstate;
 
-    bytes_in = 0;
-    bytes_out = 0;
-    insize = 0;
+    code_int    code;
+    code_int    incode;
 
-    while (insize < 3 && (rsize = read(fdin, inbuf+insize, IBUFSIZ)) > 0)
-        insize += rsize;
-
-    if (insize < 3 || inbuf[0] != MAGIC_1 || inbuf[1] != MAGIC_2)
+    if (istate->in_error != CMP_OK)
     {
-        if (rsize < 0)
-            read_error();
+        return istate->in_error;
+    }
 
-        if (insize > 0)
+    if (istate->flushing)
+    {
+        /*  We're continuing to flush outbuf. There may also be a
+            string in the stack waiting to be added to outbuf.
+        */
+    }
+
+    // ds->insize is the number of bytes in inbuf. Use strm->avail_in
+
+    // We require at least 3 bytes be available at the outset
+    if (strm->total_in == 0)
+    {
+        // Grab the first chunk of bytes
+        ds->insize = strm->avail_in;
+
+        if (ds->insize > IBUFSIZ)
         {
-            fprintf(stderr, "%s: not in compressed format\n",
-                                (ifname[0] != '\0'? ifname : "stdin"));
-            exit_code = 1;
+            ds->insize = IBUFSIZ;
         }
 
-        return ;
+        if (ds->insize < 3)
+        {
+            istate->in_error = CMP_STREAM_ERROR;
+            return istate->in_error;
+        }
+
+        memcpy(istate->inbuf, strm->next_in, ds->insize);
+        ds->rsize = ds->insize;
+
+        if (istate->inbuf[0] != MAGIC_1 || istate->inbuf[1] != MAGIC_2)
+        {
+            istate->in_error = CMP_DATA_ERROR;
+            return istate->in_error;
+        }
+
+        istate->maxbits    = istate->inbuf[2] & BIT_MASK;
+        istate->block_mode = istate->inbuf[2] & BLOCK_MODE;
+        ds->maxmaxcode     = MAXCODE(istate->maxbits);
+
+        if (istate->maxbits > BITS)
+        {
+            // Too many bits for this library to use
+            istate->in_error = CMP_DATA_ERROR;
+            return istate->in_error;
+        }
+
+        // consume these header bytes
+        strm->next_in  += 3;
+        strm->avail_in -= 3;
+        strm->total_in  = 3;
+
+        ds->maxcode = MAXCODE(ds->n_bits = INIT_BITS)-1;
+        ds->bitmask = (1<<ds->n_bits)-1;
+        ds->oldcode = -1;
+        ds->finchar = 0;
+        ds->outpos  = 0;                // offset into the output buffer in bytes
+        ds->posbits = 3<<3;             // we've read 3 bytes so far
+
+        ds->free_ent = ((istate->block_mode) ? FIRST : 256);
+
+        // As above, initialize the first 256 entries in the table.
+        clear_tab_prefixof(istate);
+
+        for (code = 255 ; code >= 0 ; --code)
+        {
+            tab_suffixof(istate, code) = (Byte)code;
+        }
     }
-
-    maxbits = inbuf[2] & BIT_MASK;
-    block_mode = inbuf[2] & BLOCK_MODE;
-    maxmaxcode = MAXCODE(maxbits);
-
-    if (maxbits > BITS)
-    {
-        fprintf(stderr,
-                "%s: compressed with %d bits, can only handle %d bits\n",
-                (*ifname != '\0' ? ifname : "stdin"), maxbits, BITS);
-        exit_code = 4;
-        return;
-    }
-
-    bytes_in = insize;
-    maxcode = MAXCODE(n_bits = INIT_BITS)-1;
-    bitmask = (1<<n_bits)-1;
-    oldcode = -1;
-    finchar = 0;
-    outpos = 0;
-    posbits = 3<<3;
-
-    free_ent = ((block_mode) ? FIRST : 256);
-
-    clear_tab_prefixof();   /* As above, initialize the first
-                               256 entries in the table. */
-
-    for (code = 255 ; code >= 0 ; --code)
-        tab_suffixof(code) = (char_type)code;
 
     do
     {
+        int inbits;
+
 resetbuf:   ;
         {
-            int    i;
-            int    e;
-            int    o;
+            // Erase the bits we have read from the front of inbuf
+            int o = ds->posbits >> 3;
+            int e = (o <= ds->insize) ? ds->insize - o : 0;
 
-            o = posbits >> 3;
-            e = o <= insize ? insize - o : 0;
-
-            for (i = 0 ; i < e ; ++i)
-                inbuf[i] = inbuf[i+o];
-
-            insize = e;
-            posbits = 0;
-        }
-
-        if (insize < sizeof(inbuf)-IBUFSIZ)
-        {
-            if ((rsize = read(fdin, inbuf+insize, IBUFSIZ)) < 0)
-                read_error();
-
-            insize += rsize;
-        }
-
-        inbits = ((rsize > 0) ? (insize - insize%n_bits)<<3 : 
-                                (insize<<3)-(n_bits-1));
-
-        while (inbits > posbits)
-        {
-            if (free_ent > maxcode)
+            for (int i = 0 ; i < e ; ++i)
             {
-                posbits = ((posbits-1) + ((n_bits<<3) -
-                                 (posbits-1+(n_bits<<3))%(n_bits<<3)));
+                istate->inbuf[i] = istate->inbuf[i+o];
+            }
 
-                ++n_bits;
-                if (n_bits == maxbits)
-                    maxcode = maxmaxcode;
+            ds->insize = e;
+            ds->posbits = 0;
+        }
+
+        if (ds->insize < IBUFSIZ_TOTAL - IBUFSIZ)
+        {
+            // Append some more bytes
+            ds->rsize = IBUFSIZ;
+
+            if (ds->rsize > strm->avail_in)
+            {
+                ds->rsize = strm->avail_in;
+            }
+
+            memcpy(istate->inbuf + ds->insize, strm->next_in, ds->rsize);
+            ds->insize += ds->rsize;
+
+            strm->next_in  += ds->rsize;
+            strm->avail_in -= ds->rsize;
+            strm->total_in += ds->rsize;
+        }
+
+        /*  (insize % n_bits) is the number of bits left over at the end of
+            the buffer after a whole number of codes.
+
+            REVISIT subtracting this from a number of bytes doesn't
+            make sense to me. It has something to do with the n_bits<<3
+            elsewhere.
+
+        */
+        inbits = ((ds->rsize > 0) ?
+                        (ds->insize - ds->insize % ds->n_bits)<<3 :
+                        (ds->insize<<3) - (ds->n_bits-1));
+
+        while (inbits > ds->posbits)
+        {
+            if (ds->free_ent > ds->maxcode)
+            {
+                // Time to increase the code size
+                // First do something with the alignment
+                int nb = ds->n_bits << 3;
+
+                ds->posbits = (ds->posbits-1) + (nb - (ds->posbits-1 + nb) % nb);
+
+                ++ds->n_bits;
+                if (ds->n_bits == istate->maxbits)
+                    ds->maxcode = ds->maxmaxcode;
                 else
-                    maxcode = MAXCODE(n_bits)-1;
+                    ds->maxcode = MAXCODE(ds->n_bits)-1;
 
-                bitmask = (1<<n_bits)-1;
+                ds->bitmask = (1<<ds->n_bits)-1;
                 goto resetbuf;
             }
 
-            input(inbuf,posbits,code,n_bits,bitmask);
+            code = input(istate);
 
-            if (oldcode == -1)
+            if (ds->oldcode == -1)
             {
-                if (code >= 256) {
-                    fprintf(stderr, "oldcode:-1 code:%i\n", (int)(code));
-                    fprintf(stderr, "uncompress: corrupt input\n");
-                    abort_compress();
+                if (code >= 256)
+                {
+                    istate->in_error = CMP_DATA_ERROR;
+                    return istate->in_error;
                 }
-                outbuf[outpos++] = (char_type)(finchar = (int)(oldcode = code));
+
+                ds->oldcode = code;
+                ds->finchar = (Byte)code;
+                istate->outbuf[ds->outpos++] = ds->finchar;
                 continue;
             }
 
-            if (code == CLEAR && block_mode)
+            if (code == CLEAR && istate->block_mode)
             {
-                clear_tab_prefixof();
-                free_ent = FIRST - 1;
-                posbits = ((posbits-1) + ((n_bits<<3) -
-                            (posbits-1+(n_bits<<3))%(n_bits<<3)));
-                maxcode = MAXCODE(n_bits = INIT_BITS)-1;
-                bitmask = (1<<n_bits)-1;
+                clear_tab_prefixof(istate);
+                ds->free_ent = FIRST - 1;
+                ds->posbits = ((ds->posbits-1) + ((ds->n_bits<<3) -
+                            (ds->posbits-1+(ds->n_bits<<3)) % (ds->n_bits<<3)));
+                ds->maxcode = MAXCODE(ds->n_bits = INIT_BITS)-1;
+                ds->bitmask = (1<<ds->n_bits)-1;
                 goto resetbuf;
             }
 
             incode = code;
-            stackp = de_stack;
+            ds->stackp = de_stack(istate);
 
-            if (code >= free_ent)   /* Special case for KwKwK string.   */
+            if (code >= ds->free_ent)   /* Special case for KwKwK string.   */
             {
-                if (code > free_ent)
+                if (code > ds->free_ent)
                 {
-                    char_type      *p;
+#if DEBUG
+                    Byte *p;
 
-                    posbits -= n_bits;
-                    p = &inbuf[posbits>>3];
+                    ds->posbits -= ds->n_bits;
+                    p = &istate->inbuf[ds->posbits>>3];
 
-                    fprintf(stderr, "insize:%d posbits:%d inbuf:%02X %02X %02X %02X %02X (%d)\n", insize, posbits,
-                            p[-1],p[0],p[1],p[2],p[3], (posbits&07));
+                    fprintf(stderr, "insize:%d posbits:%d inbuf:%02X %02X %02X %02X %02X (%d)\n",
+                            ds->insize, ds->posbits,
+                            p[-1],p[0],p[1],p[2],p[3], (ds->posbits&07));
                     fprintf(stderr, "uncompress: corrupt input\n");
-                    abort_compress();
+#endif
+
+                    // abort
+                    istate->in_error = CMP_DATA_ERROR;
+                    return istate->in_error;
                 }
 
-                *--stackp = (char_type)finchar;
-                code = oldcode;
+                *--ds->stackp = ds->finchar;
+                code = ds->oldcode;
             }
 
             while ((cmp_code_int)code >= (cmp_code_int)256)
             { /* Generate output characters in reverse order */
-                *--stackp = tab_suffixof(code);
-                code = tab_prefixof(code);
+                *--ds->stackp = tab_suffixof(istate, code);
+                code = tab_prefixof(istate, code);
             }
 
-            *--stackp = (char_type)(finchar = tab_suffixof(code));
+            ds->finchar = (Byte)tab_suffixof(istate, code);
+            *--ds->stackp = ds->finchar;
 
-        /* And put them out in forward order */
+            /* And put them out in forward order */
+            append_string(strm);
 
+            if (istate->flushing)
             {
-                int    i;
-
-                if (outpos+(i = (de_stack-stackp)) >= OBUFSIZ)
-                {
-                    do
-                    {
-                        if (i > OBUFSIZ-outpos) i = OBUFSIZ-outpos;
-
-                        if (i > 0)
-                        {
-                            memcpy(outbuf+outpos, stackp, i);
-                            outpos += i;
-                        }
-
-                        if (outpos >= OBUFSIZ)
-                        {
-                            if (write(fdout, outbuf, outpos) != outpos)
-                                write_error();
-
-                            outpos = 0;
-                        }
-                        stackp+= i;
-                    }
-                    while ((i = (de_stack-stackp)) > 0);
-                }
-                else
-                {
-                    memcpy(outbuf+outpos, stackp, i);
-                    outpos += i;
-                }
+                // The client must do something
+                return CMP_OK;
             }
 
-            if ((code = free_ent) < maxmaxcode) /* Generate the new entry. */
+            if ((code = ds->free_ent) < ds->maxmaxcode) /* Generate the new entry. */
             {
-                tab_prefixof(code) = (unsigned short)oldcode;
-                tab_suffixof(code) = (char_type)finchar;
-                free_ent = code+1;
-            } 
+                tab_prefixof(istate, code) = (unsigned short)ds->oldcode;
+                tab_suffixof(istate, code) = ds->finchar;
+                ds->free_ent = code+1;
+            }
 
-            oldcode = incode;   /* Remember previous code.  */
+            ds->oldcode = incode;   /* Remember previous code.  */
         }
-
-        bytes_in += rsize;
     }
-    while (rsize > 0);
+    while (ds->rsize > 0);
 
-    if (outpos > 0 && write(fdout, outbuf, outpos) != outpos)
-        write_error();
-}
+    if (ds->outpos > 0)
+    {
+        flush_decompress(strm);
+    }
 
-
-
-
-void
-read_error()
-{
-    fprintf(stderr, "\nread error on");
-    perror((ifname[0] != '\0') ? ifname : "stdin");
-    abort_compress();
-}
-
-void
-write_error()
-{
-    fprintf(stderr, "\nwrite error on");
-    perror((ofname[0] != '\0') ? ofname : "stdout");
-    abort_compress();
-}
-
-void
-abort_compress()
-{
-    if (remove_ofname)
-        unlink(ofname);
-
-    exit(1);
+    return CMP_OK;
 }
