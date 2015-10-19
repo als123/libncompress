@@ -1,6 +1,6 @@
 
 PACKAGE_VERSION = 4.2
-PACKAGE_RELEASE = 1
+PACKAGE_RELEASE = 2
 PACKAGE_TARNAME = libncompress
 
 prefix      = /usr/local

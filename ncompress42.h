@@ -30,6 +30,10 @@
         Anthony L. Shipman
 */
 
+#ifdef __cplusplus
+extern "C" {
+#endif /* __cplusplus */
+
 //======================================================================
 
 /*  This API differs from the zlib API.  The original compress code
@@ -104,4 +108,9 @@ CompressError compress(CompressCtxt* ctxt);
 CompressError decompress(CompressCtxt* ctxt);
 
 //======================================================================
+
+#ifdef __cplusplus
+}
+#endif /* __cplusplus */
+
 #endif // NCOMPRESS42_H
