@@ -136,27 +136,27 @@ clear_tab_prefixof(PrivState* ps)
 
 
 static void
-createPrivState(CompressCtxt* ctxt, int bits)
+createPrivState(NCompressCtxt* ctxt, int bits)
 {
-    if (!ctxt->private)
+    if (!ctxt->priv)
     {
-        PrivState* private = (PrivState*)malloc(sizeof(PrivState));
+        PrivState* priv = (PrivState*)malloc(sizeof(PrivState));
 
-        memset(private, 0, sizeof(PrivState));
+        memset(priv, 0, sizeof(PrivState));
 
-        private->block_mode = BLOCK_MODE;
-        private->maxbits    = bits;
-        private->bytes_in   = 0;
-        private->bytes_out  = 0;
+        priv->block_mode = BLOCK_MODE;
+        priv->maxbits    = bits;
+        priv->bytes_in   = 0;
+        priv->bytes_out  = 0;
 
-        ctxt->private = private;
+        ctxt->priv = priv;
     }
 }
 
 
 
 void
-initCompress(CompressCtxt* ctxt, int bits)
+nInitCompress(NCompressCtxt* ctxt, int bits)
 {
     if (bits == 0)
     {
@@ -173,28 +173,28 @@ initCompress(CompressCtxt* ctxt, int bits)
         bits = BITS;
     }
 
-    ctxt->private = NULL;
+    ctxt->priv = NULL;
     createPrivState(ctxt, bits);
 }
 
 
 
 void
-initDecompress(CompressCtxt* ctxt)
+nInitDecompress(NCompressCtxt* ctxt)
 {
-    ctxt->private = NULL;
+    ctxt->priv = NULL;
     createPrivState(ctxt, 0);
 }
 
 
 
 void
-freeCompress(CompressCtxt* ctxt)
+nFreeCompress(NCompressCtxt* ctxt)
 {
-    if (ctxt->private)
+    if (ctxt->priv)
     {
-        free(ctxt->private);
-        ctxt->private = NULL;
+        free(ctxt->priv);
+        ctxt->priv = NULL;
     }
 }
 
@@ -274,8 +274,8 @@ primetab[256] =     /* Special secondary hash table.     */
 
 */
 
-CompressError
-compress(CompressCtxt* ctxt)
+NCompressError
+nCompress(NCompressCtxt* ctxt)
 {
     long        hp;
     int         rpos;
@@ -290,7 +290,7 @@ compress(CompressCtxt* ctxt)
     int         ratio;
     long        checkpoint;
     code_int    extcode;
-    PrivState*  ps = (PrivState*)ctxt->private;
+    PrivState*  ps = (PrivState*)ctxt->priv;
 
     union
     {
@@ -393,7 +393,7 @@ compress(CompressCtxt* ctxt)
             {
                 if ((ctxt->writer)(ps->outbuf, OBUFSIZ, ctxt->rwCtxt) != OBUFSIZ)
                 {
-                    return CMP_WRITE_ERROR;
+                    return NCMP_WRITE_ERROR;
                 }
 
                 outbits -= (OBUFSIZ<<3);
@@ -491,7 +491,7 @@ endlop:     if (fcode.e.ent >= FIRST && rpos < rsize)
 
     if (rsize < 0)
     {
-        return CMP_OTHER_ERROR;
+        return NCMP_OTHER_ERROR;
     }
 
     if (ps->bytes_in > 0)
@@ -501,12 +501,12 @@ endlop:     if (fcode.e.ent >= FIRST && rpos < rsize)
 
     if ((ctxt->writer)(ps->outbuf, (outbits+7)>>3, ctxt->rwCtxt) != (outbits+7)>>3)
     {
-        return CMP_WRITE_ERROR;
+        return NCMP_WRITE_ERROR;
     }
 
     ps->bytes_out += (outbits+7)>>3;
 
-    return CMP_OK;
+    return NCMP_OK;
 }
 
 
@@ -518,8 +518,8 @@ endlop:     if (fcode.e.ent >= FIRST && rpos < rsize)
     with those of the compress() routine.  See the definitions above.
 */
 
-CompressError
-decompress(CompressCtxt* ctxt)
+NCompressError
+nDecompress(NCompressCtxt* ctxt)
 {
     Byte        *stackp;
     code_int    code;
@@ -536,7 +536,7 @@ decompress(CompressCtxt* ctxt)
     code_int    maxmaxcode;
     int         n_bits;
     int         rsize;
-    PrivState*  ps = (PrivState*)ctxt->private;
+    PrivState*  ps = (PrivState*)ctxt->priv;
 
     ps->bytes_in = 0;
     ps->bytes_out = 0;
@@ -549,7 +549,7 @@ decompress(CompressCtxt* ctxt)
 
     if (insize < 3 || ps->inbuf[0] != MAGIC_1 || ps->inbuf[1] != MAGIC_2)
     {
-        return CMP_DATA_ERROR;
+        return NCMP_DATA_ERROR;
     }
 
     ps->maxbits    = ps->inbuf[2] & BIT_MASK;
@@ -559,7 +559,7 @@ decompress(CompressCtxt* ctxt)
 
     if (ps->maxbits > BITS)
     {
-        return CMP_BITS_ERROR;
+        return NCMP_BITS_ERROR;
     }
 
     ps->bytes_in = insize;
@@ -603,7 +603,7 @@ resetbuf:   ;
         {
             if ((rsize = (ctxt->reader)(ps->inbuf + insize, IBUFSIZ, ctxt->rwCtxt)) < 0)
             {
-                return CMP_READ_ERROR;
+                return NCMP_READ_ERROR;
             }
 
             insize += rsize;
@@ -638,7 +638,7 @@ resetbuf:   ;
                     fprintf(stderr, "oldcode:-1 code:%i\n", (int)(code));
                     fprintf(stderr, "uncompress: corrupt input\n");
 #endif
-                    return CMP_DATA_ERROR;
+                    return NCMP_DATA_ERROR;
                 }
                 ps->outbuf[outpos++] = (Byte)(finchar = (int)(oldcode = code));
                 continue;
@@ -672,7 +672,7 @@ resetbuf:   ;
                             p[-1],p[0],p[1],p[2],p[3], (posbits&07));
                     fprintf(stderr, "uncompress: corrupt input\n");
 #endif
-                    return CMP_DATA_ERROR;
+                    return NCMP_DATA_ERROR;
                 }
 
                 *--stackp = (Byte)finchar;
@@ -711,7 +711,7 @@ resetbuf:   ;
                         {
                             if ((ctxt->writer)(ps->outbuf, outpos, ctxt->rwCtxt) != outpos)
                             {
-                                return CMP_WRITE_ERROR;
+                                return NCMP_WRITE_ERROR;
                             }
 
                             outpos = 0;
@@ -743,8 +743,8 @@ resetbuf:   ;
 
     if (outpos > 0 && (ctxt->writer)(ps->outbuf, outpos, ctxt->rwCtxt) != outpos)
     {
-        return CMP_WRITE_ERROR;
+        return NCMP_WRITE_ERROR;
     }
 
-    return CMP_OK;
+    return NCMP_OK;
 }

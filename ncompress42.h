@@ -48,39 +48,39 @@ typedef unsigned char Byte;
     room is numBytes.  It must return the number of bytes read or 0 for
     end of file or -1 for an error.
 */
-typedef int (*CmpStreamReader)(Byte* bytes, size_t numBytes, void* rwCtxt);
+typedef int (*NCmpStreamReader)(Byte* bytes, size_t numBytes, void* rwCtxt);
 
 
 /*  This is a function to push bytes to an output stream.
     It must return the number of bytes pushed or -1 for an error.
 */
-typedef int (*CmpStreamWriter)(const Byte* bytes, size_t numBytes, void* rwCtxt);
+typedef int (*NCmpStreamWriter)(const Byte* bytes, size_t numBytes, void* rwCtxt);
 
 
-typedef struct CompressCtxt
+typedef struct NCompressCtxt
 {
-    CmpStreamReader     reader;
-    CmpStreamWriter     writer;
+    NCmpStreamReader    reader;
+    NCmpStreamWriter    writer;
     void*               rwCtxt;         // context for the reader and writer
 
-    void*               private;
-} CompressCtxt;
+    void*               priv;
+} NCompressCtxt;
 
 
 /*  Error codes, mainly from decompression.
 */
-typedef enum CompressError
+typedef enum NCompressError
 {
-    CMP_OK = 0,
+    NCMP_OK = 0,
 
-    CMP_READ_ERROR,     // an error from the reader
-    CMP_WRITE_ERROR,    // an error from the writer
+    NCMP_READ_ERROR,     // an error from the reader
+    NCMP_WRITE_ERROR,    // an error from the writer
 
-    CMP_DATA_ERROR,     // invalid compressed data format
-    CMP_BITS_ERROR,     // compressed with too large a bits parameter
-    CMP_OTHER_ERROR,    // some other internal error
+    NCMP_DATA_ERROR,     // invalid compressed data format
+    NCMP_BITS_ERROR,     // compressed with too large a bits parameter
+    NCMP_OTHER_ERROR,    // some other internal error
 
-} CompressError;
+} NCompressError;
 
 
 /** Initialise for compression.
@@ -92,20 +92,20 @@ typedef enum CompressError
     size of a code word. The value must be in the range 9 to 16 or else
     zero to select the default of 16.
 */
-void    initCompress(CompressCtxt* ctxt, int bits);
+void    nInitCompress(NCompressCtxt* ctxt, int bits);
 
 /*  Initialise for decompression.
 
     Set the reader, writer and read-write context in
     the CompressCtxt struct. Then call initDecompress()
 */
-void    initDecompress(CompressCtxt* ctxt);
+void    nInitDecompress(NCompressCtxt* ctxt);
 
-void    freeCompress(CompressCtxt* ctxt);
+void    nFreeCompress(NCompressCtxt* ctxt);
 
-CompressError compress(CompressCtxt* ctxt);
+NCompressError nCompress(NCompressCtxt* ctxt);
 
-CompressError decompress(CompressCtxt* ctxt);
+NCompressError nDecompress(NCompressCtxt* ctxt);
 
 //======================================================================
 
