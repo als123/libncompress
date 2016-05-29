@@ -11,6 +11,8 @@ Prefix: /usr
 Source0: libncompress-%{version}.tgz
 BuildRoot: %{_topdir}/buildroot
 
+Provides: libncompress.so()(64bit)
+
 %description 
 This library contains the compression and decompression code
 used by the old compress program. In particular it is

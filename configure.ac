@@ -1,7 +1,7 @@
 
 AC_PREREQ(2.69)
 AC_INIT([libncompress], [4.2], [als@iinet.net.au])
-AC_SUBST(PACKAGE_RELEASE, [3])
+AC_SUBST(PACKAGE_RELEASE, [5])
 
 # Checks for programs.
 AC_PROG_CC
