@@ -7,5 +7,5 @@ Name: libmimemagic
 Description: Ye Olde Compress Library
 Version: @PACKAGE_VERSION@
 
-Libs: -L${libdir} -lcompress42
+Libs: -L${libdir} -lncompress
 Cflags: -I${includedir}
